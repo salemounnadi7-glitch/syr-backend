@@ -1,32 +1,29 @@
-import express from 'express';
-import http from 'http';
-import { Server } from 'socket.io';
-import cors from 'cors';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import sqlite3 from 'sqlite3';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import fs from 'fs';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
+const cors = require('cors');
+const sqlite3 = require('sqlite3');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] }
+const io = socketIo(server, {
+  cors: { 
+    origin: "*", 
+    methods: ["GET", "POST"] 
+  }
 });
 
-const JWT_SECRET = 'votre_secret_jwt_syr_2024';
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
+// Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Créer le dossier uploads s'il n'existe pas
-const uploadsDir = join(__dirname, 'uploads');
+const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
@@ -34,8 +31,8 @@ if (!fs.existsSync(uploadsDir)) {
 // Servir les fichiers statiques
 app.use('/uploads', express.static(uploadsDir));
 
-// Base de données SQLite
-const db = new sqlite3.Database(':memory:');
+// Base de données SQLite (fichier persistant pour Render)
+const db = new sqlite3.Database('messages.db');
 
 // Initialisation de la base
 db.serialize(() => {
@@ -74,81 +71,56 @@ db.serialize(() => {
 
 const connectedUsers = new Map();
 
-// Middleware pour gérer les fichiers
+// Routes API de base pour les tests
+app.get('/', (req, res) => {
+  res.json({ 
+    message: '🚀 SYR Backend is running!',
+    endpoints: {
+      root: '/',
+      api: '/api',
+      messages: '/api/messages',
+      public_messages: '/api/messages/public',
+      login: '/api/login'
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api', (req, res) => {
+  res.json({ 
+    message: '📡 SYR API is working!',
+    version: '1.0.0',
+    status: 'active'
+  });
+});
+
+// Middleware de logging
 app.use((req, res, next) => {
-  if (req.method === 'POST' && req.headers['content-type']?.includes('multipart/form-data')) {
-    // Pour les formulaires avec fichiers, on utilise un middleware personnalisé
-    let body = '';
-    const chunks = [];
-    
-    req.on('data', chunk => {
-      chunks.push(chunk);
-      body += chunk.toString();
-    });
-    
-    req.on('end', () => {
-      // Parse simple du form-data (pour la démo)
-      const boundary = req.headers['content-type'].split('boundary=')[1];
-      const parts = body.split('--' + boundary);
-      
-      const fields = {};
-      let fileData = null;
-      
-      parts.forEach(part => {
-        if (part.includes('Content-Disposition')) {
-          const nameMatch = part.match(/name="([^"]+)"/);
-          const filenameMatch = part.match(/filename="([^"]+)"/);
-          
-          if (nameMatch) {
-            const name = nameMatch[1];
-            const value = part.split('\r\n\r\n')[1]?.split('\r\n')[0];
-            
-            if (filenameMatch) {
-              // C'est un fichier
-              const filename = filenameMatch[1];
-              const fileContent = part.split('\r\n\r\n')[1]?.split('\r\n--')[0];
-              
-              if (fileContent) {
-                fileData = {
-                  filename: filename,
-                  content: fileContent,
-                  fieldName: name
-                };
-              }
-            } else if (value) {
-              // C'est un champ normal
-              fields[name] = value;
-            }
-          }
-        }
-      });
-      
-      req.body = fields;
-      req.file = fileData;
-      next();
-    });
-  } else {
-    next();
-  }
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
 });
 
 // Routes API
 app.post('/api/login', (req, res) => {
   const { username, password, service } = req.body;
 
+  console.log('🔐 Tentative de connexion:', { username, service });
+
   db.get(
-    'SELECT u.* FROM users u WHERE u.username = ? AND u.password = ?',
-    [username, password],
+    'SELECT * FROM users WHERE username = ? AND password = ? AND service_id = ?',
+    [username, password, service],
     (err, user) => {
       if (err) {
-        console.error('Erreur DB:', err);
+        console.error('❌ Erreur DB:', err);
         return res.status(500).json({ error: 'Erreur base de données' });
       }
       
       if (!user) {
-        return res.status(401).json({ error: 'Utilisateur non trouvé ou mot de passe incorrect' });
+        console.log('❌ Identifiants incorrects pour:', username);
+        return res.status(401).json({ error: 'Identifiants incorrects' });
       }
 
+      console.log('✅ Connexion réussie:', user.username);
       res.json({
         success: true,
         user: {
@@ -161,79 +133,84 @@ app.post('/api/login', (req, res) => {
   );
 });
 
-app.get('/api/services', (req, res) => {
-  db.all('SELECT * FROM services ORDER BY name', (err, services) => {
-    if (err) {
-      console.error('Erreur DB:', err);
-      return res.status(500).json({ error: 'Erreur base de données' });
-    }
-    res.json(services);
-  });
-});
-
-app.get('/api/messages/public', (req, res) => {
+// Récupérer tous les messages
+app.get('/api/messages', (req, res) => {
+  console.log('📨 Récupération de tous les messages');
+  
   db.all(`
-    SELECT m.* 
-    FROM messages m 
-    WHERE m.message_type = 'public' 
-    ORDER BY m.created_at DESC
+    SELECT * FROM messages 
+    ORDER BY created_at DESC
+    LIMIT 100
   `, (err, messages) => {
     if (err) {
-      console.error('Erreur DB:', err);
+      console.error('❌ Erreur DB messages:', err);
       return res.status(500).json({ error: 'Erreur base de données' });
     }
+    
+    console.log(`✅ ${messages.length} messages récupérés`);
     res.json(messages);
   });
 });
 
-// Route pour envoyer des messages AVEC FICHIERS
+// Récupérer les messages publics
+app.get('/api/messages/public', (req, res) => {
+  console.log('📢 Récupération messages publics');
+  
+  db.all(`
+    SELECT * FROM messages 
+    WHERE message_type = 'public' 
+    OR to_service = 'tous'
+    ORDER BY created_at DESC
+  `, (err, messages) => {
+    if (err) {
+      console.error('❌ Erreur DB messages publics:', err);
+      return res.status(500).json({ error: 'Erreur base de données' });
+    }
+    
+    console.log(`✅ ${messages.length} messages publics récupérés`);
+    res.json(messages);
+  });
+});
+
+// Route pour envoyer des messages
 app.post('/api/messages', (req, res) => {
   const { fromUser, fromService, toService, messageType, content, replyTo } = req.body;
   
-  console.log('📨 Nouveau message reçu:', { fromUser, fromService, toService, messageType, content });
-
-  let file_name = null;
-  let file_url = null;
-  let file_type = null;
-
-  // Gestion des fichiers (version simplifiée pour la démo)
-  if (req.file) {
-    const file = req.file;
-    file_name = file.filename;
-    file_type = file.filename.split('.').pop();
-    
-    // Pour la démo, on crée une URL factice
-    file_url = `/uploads/${Date.now()}_${file.filename}`;
-    
-    console.log('📎 Fichier joint:', file_name);
-  }
+  console.log('📨 Nouveau message reçu:', { 
+    fromUser, 
+    fromService, 
+    toService, 
+    messageType, 
+    contentLength: content?.length 
+  });
 
   db.run(
-    `INSERT INTO messages (from_user, from_service, to_service, message_type, content, file_name, file_url, file_type, reply_to) 
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [fromUser, fromService, toService, messageType, content, file_name, file_url, file_type, replyTo || null],
+    `INSERT INTO messages (from_user, from_service, to_service, message_type, content, reply_to) 
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [fromUser, fromService, toService, messageType, content, replyTo || null],
     function(err) {
       if (err) {
         console.error('❌ Erreur enregistrement message:', err);
         return res.status(500).json({ error: 'Erreur enregistrement message' });
       }
 
-      console.log('✅ Message enregistré avec ID:', this.lastID);
+      const messageId = this.lastID;
+      console.log('✅ Message enregistré avec ID:', messageId);
 
       // Récupérer le message complet
-      db.get("SELECT * FROM messages WHERE id = ?", [this.lastID], (err, message) => {
+      db.get("SELECT * FROM messages WHERE id = ?", [messageId], (err, message) => {
         if (err) {
           console.error('❌ Erreur récupération message:', err);
           return res.status(500).json({ error: 'Erreur récupération message' });
         }
 
         // Diffuser le message via Socket.io
-        if (messageType === 'public') {
+        if (messageType === 'public' || toService === 'tous') {
           io.emit('new_message', message);
           console.log('📢 Message diffusé publiquement');
         } else {
           io.emit('new_private_message', message);
-          console.log('📨 Message privé diffusé');
+          console.log('📨 Message privé diffusé à:', toService);
         }
 
         res.json(message);
@@ -242,22 +219,25 @@ app.post('/api/messages', (req, res) => {
   );
 });
 
-// Route pour les messages privés
+// Route pour les messages privés entre deux services
 app.get('/api/messages/private/:userService/:targetService', (req, res) => {
   const { userService, targetService } = req.params;
   
+  console.log(`📨 Récupération messages privés entre ${userService} et ${targetService}`);
+  
   db.all(`
-    SELECT m.* 
-    FROM messages m 
-    WHERE ((m.from_service = ? AND m.to_service = ?) 
-       OR (m.from_service = ? AND m.to_service = ?))
-    AND m.message_type = 'private'
-    ORDER BY m.created_at
+    SELECT * FROM messages 
+    WHERE ((from_service = ? AND to_service = ?) 
+       OR (from_service = ? AND to_service = ?))
+    AND message_type = 'private'
+    ORDER BY created_at ASC
   `, [userService, targetService, targetService, userService], (err, messages) => {
     if (err) {
-      console.error('Erreur DB:', err);
+      console.error('❌ Erreur DB messages privés:', err);
       return res.status(500).json({ error: 'Erreur base de données' });
     }
+    
+    console.log(`✅ ${messages.length} messages privés récupérés`);
     res.json(messages);
   });
 });
@@ -268,7 +248,7 @@ io.on('connection', (socket) => {
 
   socket.on('user_connected', (userData) => {
     connectedUsers.set(socket.id, userData);
-    console.log('✅ Utilisateur en ligne:', userData.username);
+    console.log('✅ Utilisateur en ligne:', userData.username, '- Service:', userData.service);
     
     // Diffuser la liste mise à jour
     io.emit('users_online', Array.from(connectedUsers.values()));
@@ -284,22 +264,22 @@ io.on('connection', (socket) => {
       io.emit('users_online', Array.from(connectedUsers.values()));
     }
   });
-
-  // Écouter les messages en direct
-  socket.on('send_message', (messageData) => {
-    console.log('💬 Message reçu via socket:', messageData);
-    
-    // Diffuser le message à tous les clients
-    io.emit('new_message', {
-      ...messageData,
-      id: Date.now(),
-      ts: new Date().toISOString()
-    });
-  });
 });
 
+// Gestion des erreurs non capturées
+process.on('uncaughtException', (error) => {
+  console.error('❌ Exception non capturée:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Rejet non géré:', reason);
+});
+
+// Démarrage du serveur
 server.listen(PORT, () => {
-  console.log(`🚀 Serveur backend sur http://localhost:${PORT}`);
+  console.log(`🚀 Serveur backend démarré sur le port ${PORT}`);
+  console.log(`📊 Base de données: messages.db`);
   console.log(`📁 Dossier uploads: ${uploadsDir}`);
-  console.log(`🔧 Prêt pour les fichiers et messages`);
+  console.log(`🔧 Prêt à recevoir des requêtes!`);
+  console.log(`🌐 URL: http://localhost:${PORT}`);
 });
