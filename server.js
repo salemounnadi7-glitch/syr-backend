@@ -179,35 +179,75 @@ app.get('/api/messages/public', (req, res) => {
   });
 });
 
+// CORRECTION : Route POST pour les messages - version simplifiée
 app.post('/api/messages', (req, res) => {
-  console.log('💬 New message:', req.body);
+  console.log('💬 New message POST reçu:', req.body);
   
-  const { fromUser, fromService, toService, messageType, content, replyTo } = req.body;
+  try {
+    const { fromUser, fromService, toService, messageType, content, replyTo } = req.body;
 
-  db.run(
-    `INSERT INTO messages (from_user, from_service, to_service, message_type, content, reply_to) VALUES (?, ?, ?, ?, ?, ?)`,
-    [fromUser, fromService, toService, messageType, content, replyTo || null],
-    function(err) {
-      if (err) {
-        console.error('❌ Message save error:', err);
-        return res.status(500).json({ error: 'Message save failed' });
-      }
-
-      db.get("SELECT * FROM messages WHERE id = ?", [this.lastID], (err, message) => {
-        if (err) {
-          return res.status(500).json({ error: 'Message retrieval failed' });
-        }
-
-        if (messageType === 'public' || toService === 'tous') {
-          io.emit('new_message', message);
-        } else {
-          io.emit('new_private_message', message);
-        }
-
-        res.json(message);
+    // Validation des données requises
+    if (!fromUser || !fromService || !toService) {
+      return res.status(400).json({ 
+        error: 'Données manquantes: fromUser, fromService, toService sont requis' 
       });
     }
-  );
+
+    console.log('📝 Insertion message dans DB:', { fromUser, fromService, toService, messageType, content });
+
+    db.run(
+      `INSERT INTO messages (from_user, from_service, to_service, message_type, content, reply_to) VALUES (?, ?, ?, ?, ?, ?)`,
+      [fromUser, fromService, toService, messageType || 'public', content, replyTo || null],
+      function(err) {
+        if (err) {
+          console.error('❌ Erreur insertion DB:', err);
+          return res.status(500).json({ error: 'Erreur sauvegarde message: ' + err.message });
+        }
+
+        const messageId = this.lastID;
+        console.log('✅ Message sauvegardé avec ID:', messageId);
+
+        // Récupérer le message complet
+        db.get("SELECT * FROM messages WHERE id = ?", [messageId], (err, message) => {
+          if (err) {
+            console.error('❌ Erreur récupération message:', err);
+            return res.status(500).json({ error: 'Erreur récupération message' });
+          }
+
+          console.log('✅ Message récupéré:', message);
+
+          // Diffuser le message via Socket.io
+          const finalMessageType = messageType || 'public';
+          if (finalMessageType === 'public' || toService === 'tous') {
+            io.emit('new_message', message);
+            console.log('📢 Message diffusé publiquement');
+          } else {
+            io.emit('new_private_message', message);
+            console.log('📨 Message privé diffusé');
+          }
+
+          res.json({
+            success: true,
+            message: message
+          });
+        });
+      }
+    );
+  } catch (error) {
+    console.error('❌ Erreur générale:', error);
+    res.status(500).json({ error: 'Erreur interne du serveur' });
+  }
+});
+
+// Route de test pour debug
+app.post('/api/messages/test', (req, res) => {
+  console.log('🧪 Test endpoint appelé:', req.body);
+  res.json({ 
+    success: true,
+    message: 'Endpoint test fonctionnel!',
+    received: req.body,
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Socket.io
@@ -234,7 +274,17 @@ app.use('*', (req, res) => {
   res.status(404).json({ 
     error: 'Route not found',
     path: req.originalUrl,
-    method: req.method
+    method: req.method,
+    availableEndpoints: [
+      'GET /',
+      'GET /health', 
+      'GET /api',
+      'GET /api/messages',
+      'GET /api/messages/public',
+      'POST /api/login',
+      'POST /api/messages',
+      'POST /api/messages/test'
+    ]
   });
 });
 
