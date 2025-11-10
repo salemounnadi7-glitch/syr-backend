@@ -8,6 +8,68 @@ const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
+
+// Configuration CORS étendue
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Logger détaillé
+app.use((req, res, next) => {
+  console.log('=== NOUVELLE REQUÊTE ===');
+  console.log('Méthode:', req.method);
+  console.log('URL:', req.url);
+  console.log('Original URL:', req.originalUrl);
+  console.log('Path:', req.path);
+  console.log('Headers:', req.headers);
+  console.log('Body:', req.body);
+  console.log('======================');
+  next();
+});
+
+// Routes de base IMMÉDIATEMENT
+app.get('/', (req, res) => {
+  console.log('✅ Route / appelée avec succès');
+  res.json({ 
+    status: 'success',
+    message: '🚀 SYR Backend is running!',
+    service: 'SYR Messagerie Backend',
+    timestamp: new Date().toISOString(),
+    endpoints: [
+      'GET /',
+      'GET /health',
+      'GET /api',
+      'GET /api/messages',
+      'GET /api/messages/public',
+      'POST /api/login',
+      'POST /api/messages'
+    ]
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'healthy',
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api', (req, res) => {
+  console.log('✅ Route /api appelée avec succès');
+  res.json({ 
+    status: 'success',
+    message: '📡 SYR API is operational!',
+    version: '1.0.0'
+  });
+});
+
+const PORT = process.env.PORT || 10000;
+
+// Configuration Socket.io APRÈS les routes de base
 const io = socketIo(server, {
   cors: { 
     origin: "*", 
@@ -15,26 +77,17 @@ const io = socketIo(server, {
   }
 });
 
-const PORT = process.env.PORT || 3000;
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Créer le dossier uploads s'il n'existe pas
+// Dossier uploads
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
-
-// Servir les fichiers statiques
 app.use('/uploads', express.static(uploadsDir));
 
-// Base de données SQLite (fichier persistant pour Render)
+// Base de données
 const db = new sqlite3.Database('messages.db');
 
-// Initialisation de la base
+// Initialisation DB
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,7 +111,6 @@ db.serialize(() => {
     read_by TEXT DEFAULT '[]'
   )`);
   
-  // Utilisateurs de test
   const stmt = db.prepare("INSERT OR IGNORE INTO users (username, password, service_id) VALUES (?, ?, ?)");
   stmt.run("admin", "admin123", "directeur");
   stmt.run("john", "john123", "secrétariat");
@@ -71,56 +123,25 @@ db.serialize(() => {
 
 const connectedUsers = new Map();
 
-// Routes API de base pour les tests
-app.get('/', (req, res) => {
-  res.json({ 
-    message: '🚀 SYR Backend is running!',
-    endpoints: {
-      root: '/',
-      api: '/api',
-      messages: '/api/messages',
-      public_messages: '/api/messages/public',
-      login: '/api/login'
-    },
-    timestamp: new Date().toISOString()
-  });
-});
-
-app.get('/api', (req, res) => {
-  res.json({ 
-    message: '📡 SYR API is working!',
-    version: '1.0.0',
-    status: 'active'
-  });
-});
-
-// Middleware de logging
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
-  next();
-});
-
 // Routes API
 app.post('/api/login', (req, res) => {
+  console.log('🔐 Login attempt:', req.body);
+  
   const { username, password, service } = req.body;
-
-  console.log('🔐 Tentative de connexion:', { username, service });
 
   db.get(
     'SELECT * FROM users WHERE username = ? AND password = ? AND service_id = ?',
     [username, password, service],
     (err, user) => {
       if (err) {
-        console.error('❌ Erreur DB:', err);
-        return res.status(500).json({ error: 'Erreur base de données' });
+        console.error('❌ DB Error:', err);
+        return res.status(500).json({ error: 'Database error' });
       }
       
       if (!user) {
-        console.log('❌ Identifiants incorrects pour:', username);
-        return res.status(401).json({ error: 'Identifiants incorrects' });
+        return res.status(401).json({ error: 'Invalid credentials' });
       }
 
-      console.log('✅ Connexion réussie:', user.username);
       res.json({
         success: true,
         user: {
@@ -133,84 +154,54 @@ app.post('/api/login', (req, res) => {
   );
 });
 
-// Récupérer tous les messages
 app.get('/api/messages', (req, res) => {
-  console.log('📨 Récupération de tous les messages');
+  console.log('📨 Fetching all messages');
   
-  db.all(`
-    SELECT * FROM messages 
-    ORDER BY created_at DESC
-    LIMIT 100
-  `, (err, messages) => {
+  db.all('SELECT * FROM messages ORDER BY created_at DESC', (err, messages) => {
     if (err) {
-      console.error('❌ Erreur DB messages:', err);
-      return res.status(500).json({ error: 'Erreur base de données' });
+      console.error('❌ DB Error:', err);
+      return res.status(500).json({ error: 'Database error' });
     }
-    
-    console.log(`✅ ${messages.length} messages récupérés`);
+    console.log(`✅ Returning ${messages.length} messages`);
     res.json(messages);
   });
 });
 
-// Récupérer les messages publics
 app.get('/api/messages/public', (req, res) => {
-  console.log('📢 Récupération messages publics');
+  console.log('📢 Fetching public messages');
   
-  db.all(`
-    SELECT * FROM messages 
-    WHERE message_type = 'public' 
-    OR to_service = 'tous'
-    ORDER BY created_at DESC
-  `, (err, messages) => {
+  db.all(`SELECT * FROM messages WHERE message_type = 'public' OR to_service = 'tous' ORDER BY created_at DESC`, (err, messages) => {
     if (err) {
-      console.error('❌ Erreur DB messages publics:', err);
-      return res.status(500).json({ error: 'Erreur base de données' });
+      console.error('❌ DB Error:', err);
+      return res.status(500).json({ error: 'Database error' });
     }
-    
-    console.log(`✅ ${messages.length} messages publics récupérés`);
     res.json(messages);
   });
 });
 
-// Route pour envoyer des messages
 app.post('/api/messages', (req, res) => {
-  const { fromUser, fromService, toService, messageType, content, replyTo } = req.body;
+  console.log('💬 New message:', req.body);
   
-  console.log('📨 Nouveau message reçu:', { 
-    fromUser, 
-    fromService, 
-    toService, 
-    messageType, 
-    contentLength: content?.length 
-  });
+  const { fromUser, fromService, toService, messageType, content, replyTo } = req.body;
 
   db.run(
-    `INSERT INTO messages (from_user, from_service, to_service, message_type, content, reply_to) 
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO messages (from_user, from_service, to_service, message_type, content, reply_to) VALUES (?, ?, ?, ?, ?, ?)`,
     [fromUser, fromService, toService, messageType, content, replyTo || null],
     function(err) {
       if (err) {
-        console.error('❌ Erreur enregistrement message:', err);
-        return res.status(500).json({ error: 'Erreur enregistrement message' });
+        console.error('❌ Message save error:', err);
+        return res.status(500).json({ error: 'Message save failed' });
       }
 
-      const messageId = this.lastID;
-      console.log('✅ Message enregistré avec ID:', messageId);
-
-      // Récupérer le message complet
-      db.get("SELECT * FROM messages WHERE id = ?", [messageId], (err, message) => {
+      db.get("SELECT * FROM messages WHERE id = ?", [this.lastID], (err, message) => {
         if (err) {
-          console.error('❌ Erreur récupération message:', err);
-          return res.status(500).json({ error: 'Erreur récupération message' });
+          return res.status(500).json({ error: 'Message retrieval failed' });
         }
 
-        // Diffuser le message via Socket.io
         if (messageType === 'public' || toService === 'tous') {
           io.emit('new_message', message);
-          console.log('📢 Message diffusé publiquement');
         } else {
           io.emit('new_private_message', message);
-          console.log('📨 Message privé diffusé à:', toService);
         }
 
         res.json(message);
@@ -219,38 +210,12 @@ app.post('/api/messages', (req, res) => {
   );
 });
 
-// Route pour les messages privés entre deux services
-app.get('/api/messages/private/:userService/:targetService', (req, res) => {
-  const { userService, targetService } = req.params;
-  
-  console.log(`📨 Récupération messages privés entre ${userService} et ${targetService}`);
-  
-  db.all(`
-    SELECT * FROM messages 
-    WHERE ((from_service = ? AND to_service = ?) 
-       OR (from_service = ? AND to_service = ?))
-    AND message_type = 'private'
-    ORDER BY created_at ASC
-  `, [userService, targetService, targetService, userService], (err, messages) => {
-    if (err) {
-      console.error('❌ Erreur DB messages privés:', err);
-      return res.status(500).json({ error: 'Erreur base de données' });
-    }
-    
-    console.log(`✅ ${messages.length} messages privés récupérés`);
-    res.json(messages);
-  });
-});
-
-// Gestion des connexions Socket.io
+// Socket.io
 io.on('connection', (socket) => {
-  console.log('👤 Utilisateur connecté:', socket.id);
+  console.log('👤 User connected:', socket.id);
 
   socket.on('user_connected', (userData) => {
     connectedUsers.set(socket.id, userData);
-    console.log('✅ Utilisateur en ligne:', userData.username, '- Service:', userData.service);
-    
-    // Diffuser la liste mise à jour
     io.emit('users_online', Array.from(connectedUsers.values()));
   });
 
@@ -258,28 +223,25 @@ io.on('connection', (socket) => {
     const userData = connectedUsers.get(socket.id);
     if (userData) {
       connectedUsers.delete(socket.id);
-      console.log('👋 Utilisateur déconnecté:', userData.username);
-      
-      // Diffuser la liste mise à jour
       io.emit('users_online', Array.from(connectedUsers.values()));
     }
   });
 });
 
-// Gestion des erreurs non capturées
-process.on('uncaughtException', (error) => {
-  console.error('❌ Exception non capturée:', error);
+// Gestion des erreurs 404
+app.use('*', (req, res) => {
+  console.log('❌ Route non trouvée:', req.originalUrl);
+  res.status(404).json({ 
+    error: 'Route not found',
+    path: req.originalUrl,
+    method: req.method
+  });
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Rejet non géré:', reason);
-});
-
-// Démarrage du serveur
-server.listen(PORT, () => {
-  console.log(`🚀 Serveur backend démarré sur le port ${PORT}`);
-  console.log(`📊 Base de données: messages.db`);
-  console.log(`📁 Dossier uploads: ${uploadsDir}`);
-  console.log(`🔧 Prêt à recevoir des requêtes!`);
-  console.log(`🌐 URL: http://localhost:${PORT}`);
+// Démarrage
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🎉 Serveur démarré sur le port ${PORT}`);
+  console.log(`🌐 URL: http://0.0.0.0:${PORT}`);
+  console.log(`📊 DB: messages.db`);
+  console.log(`🚀 Prêt!`);
 });
