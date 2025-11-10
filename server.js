@@ -30,24 +30,57 @@ app.use((req, res, next) => {
   next();
 });
 
-// Routes de base
+// Routes de base IMMÉDIATEMENT
 app.get('/', (req, res) => {
+  console.log('✅ Route / appelée avec succès');
   res.json({ 
     status: 'success',
     message: '🚀 SYR Backend is running!',
-    timestamp: new Date().toISOString()
+    service: 'SYR Messagerie Backend',
+    timestamp: new Date().toISOString(),
+    endpoints: [
+      'GET /',
+      'GET /health',
+      'GET /api',
+      'GET /api/messages',
+      'GET /api/messages/public',
+      'POST /api/login',
+      'POST /api/messages'
+    ]
   });
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy' });
+  res.status(200).json({ 
+    status: 'healthy',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ✅ ROUTE /api AJOUTÉE
+app.get('/api', (req, res) => {
+  console.log('✅ Route /api appelée avec succès');
+  res.json({ 
+    status: 'success',
+    message: '📡 SYR API is operational!',
+    version: '1.0.0',
+    endpoints: {
+      login: 'POST /api/login',
+      messages: 'GET /api/messages',
+      public_messages: 'GET /api/messages/public',
+      send_message: 'POST /api/messages'
+    }
+  });
 });
 
 const PORT = process.env.PORT || 10000;
 
-// Socket.io
+// Configuration Socket.io APRÈS les routes de base
 const io = socketIo(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] }
+  cors: { 
+    origin: "*", 
+    methods: ["GET", "POST"] 
+  }
 });
 
 // Dossier uploads
@@ -57,8 +90,8 @@ if (!fs.existsSync(uploadsDir)) {
 }
 app.use('/uploads', express.static(uploadsDir));
 
-// BASE DE DONNÉES - NOUVELLE CONNEXION
-const db = new sqlite3.Database(':memory:'); // Base en mémoire pour forcer la réinitialisation
+// BASE DE DONNÉES - NOUVELLE CONNEXION (mémoire)
+const db = new sqlite3.Database(':memory:');
 
 // Initialisation DB COMPLÈTE
 db.serialize(() => {
@@ -85,7 +118,7 @@ db.serialize(() => {
     read_by TEXT DEFAULT '[]'
   )`);
   
-  // TOUS LES UTILISATEURS - version corrigée
+  // TOUS LES UTILISATEURS
   const stmt = db.prepare("INSERT INTO users (username, password, service_id) VALUES (?, ?, ?)");
   
   stmt.run("nourreddine", "nour01", "directeur");
@@ -167,17 +200,24 @@ app.post('/api/login', (req, res) => {
 
 // Routes messages
 app.get('/api/messages', (req, res) => {
+  console.log('📨 Récupération de tous les messages');
+  
   db.all('SELECT * FROM messages ORDER BY created_at DESC', (err, messages) => {
     if (err) {
+      console.error('❌ Erreur DB:', err);
       return res.status(500).json({ error: 'Erreur base de données' });
     }
+    console.log(`✅ ${messages.length} messages récupérés`);
     res.json(messages);
   });
 });
 
 app.get('/api/messages/public', (req, res) => {
+  console.log('📢 Récupération messages publics');
+  
   db.all(`SELECT * FROM messages WHERE message_type = 'public' OR to_service = 'tous' ORDER BY created_at DESC`, (err, messages) => {
     if (err) {
+      console.error('❌ Erreur DB:', err);
       return res.status(500).json({ error: 'Erreur base de données' });
     }
     res.json(messages);
@@ -199,18 +239,22 @@ app.post('/api/messages', (req, res) => {
       [fromUser, fromService, toService, messageType || 'public', content, replyTo || null],
       function(err) {
         if (err) {
+          console.error('❌ Erreur sauvegarde message:', err);
           return res.status(500).json({ error: 'Erreur sauvegarde' });
         }
 
         db.get("SELECT * FROM messages WHERE id = ?", [this.lastID], (err, message) => {
           if (err) {
+            console.error('❌ Erreur récupération message:', err);
             return res.status(500).json({ error: 'Erreur récupération' });
           }
 
           if (messageType === 'public' || toService === 'tous') {
             io.emit('new_message', message);
+            console.log('📢 Message diffusé publiquement');
           } else {
             io.emit('new_private_message', message);
+            console.log('📨 Message privé diffusé');
           }
 
           res.json({ success: true, message: message });
@@ -218,6 +262,7 @@ app.post('/api/messages', (req, res) => {
       }
     );
   } catch (error) {
+    console.error('❌ Erreur générale:', error);
     res.status(500).json({ error: 'Erreur interne' });
   }
 });
@@ -240,9 +285,29 @@ io.on('connection', (socket) => {
   });
 });
 
+// Gestion des erreurs 404
+app.use('*', (req, res) => {
+  console.log('❌ Route non trouvée:', req.originalUrl);
+  res.status(404).json({ 
+    error: 'Route not found',
+    path: req.originalUrl,
+    method: req.method,
+    availableEndpoints: [
+      'GET /',
+      'GET /health', 
+      'GET /api',
+      'GET /api/messages',
+      'GET /api/messages/public',
+      'POST /api/login',
+      'POST /api/messages'
+    ]
+  });
+});
+
 // Démarrage
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🎉 Serveur démarré sur le port ${PORT}`);
   console.log(`👥 12 utilisateurs chargés`);
   console.log(`🚀 Prêt à recevoir des connexions!`);
+  console.log(`🌐 Testez: https://syr-backend.onrender.com/api`);
 });
