@@ -85,7 +85,16 @@ if (!fs.existsSync(uploadsDir)) {
 app.use('/uploads', express.static(uploadsDir));
 
 // Base de données
-const db = new sqlite3.Database('messages.db');
+const db = new sqlite3.Database('messages.db', (err) => {
+  if (err) {
+    console.error('Erreur DB:', err);
+  } else {
+    console.log('✅ Connecté à SQLite');
+    // Supprimer les tables existantes pour repartir à zéro
+    db.run('DROP TABLE IF EXISTS users');
+    db.run('DROP TABLE IF EXISTS messages');
+  }
+});
 
 // Initialisation DB
 db.serialize(() => {
