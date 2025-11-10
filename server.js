@@ -30,7 +30,88 @@ app.use((req, res, next) => {
   next();
 });
 
-// Routes de base IMMÉDIATEMENT
+// Configuration Socket.io AVANT les routes
+const io = socketIo(server, {
+  cors: { 
+    origin: "*", 
+    methods: ["GET", "POST"] 
+  }
+});
+
+// Dossier uploads
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+app.use('/uploads', express.static(uploadsDir));
+
+// BASE DE DONNÉES - NOUVELLE CONNEXION
+const db = new sqlite3.Database(':memory:'); // Utilisation de la mémoire pour éviter les conflits
+
+// Initialisation DB COMPLÈTE
+db.serialize(() => {
+  // Tables
+  db.run(`CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE,
+    password TEXT,
+    service_id TEXT
+  )`);
+  
+  db.run(`CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_user TEXT,
+    from_service TEXT,
+    to_service TEXT,
+    message_type TEXT,
+    content TEXT,
+    file_name TEXT,
+    file_url TEXT,
+    file_type TEXT,
+    reply_to INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    read_by TEXT DEFAULT '[]'
+  )`);
+  
+  // VIDER la table avant d'ajouter les utilisateurs
+  db.run("DELETE FROM users", (err) => {
+    if (err) console.log("Note: Table users vide ou inexistante");
+  });
+  
+  // TOUS LES UTILISATEURS - AVEC NOMS COMPLETS
+  const stmt = db.prepare("INSERT OR REPLACE INTO users (username, password, service_id) VALUES (?, ?, ?)");
+  
+  stmt.run("nourreddine", "nour01", "directeur");
+  stmt.run("faysel", "fay2526", "kwin");
+  stmt.run("amine", "amine16", "ingénieur");
+  stmt.run("naima", "naima003", "secrétariat");
+  stmt.run("belkaceme", "belka002", "comptable");
+  stmt.run("salem", "salas", "gestionnaire");
+  stmt.run("abdenour", "nouri23", "personnel");
+  stmt.run("anwar", "anwar17", "commercial");
+  stmt.run("ramzi", "ramzi98", "magasin");
+  stmt.run("riyad", "rida54", "démarcheur");
+  stmt.run("hamou", "ham0203", "chef_atelier");
+  stmt.run("chantier", "chantier0505", "chef_chantier");
+  
+  stmt.finalize();
+  
+  // VÉRIFICATION des utilisateurs ajoutés
+  db.all("SELECT * FROM users", (err, users) => {
+    if (err) {
+      console.error('❌ Erreur vérification users:', err);
+    } else {
+      console.log(`🎉 BASE DE DONNÉES INITIALISÉE AVEC ${users.length} UTILISATEURS:`);
+      users.forEach(user => {
+        console.log(`   👤 ${user.username} (${user.service_id})`);
+      });
+    }
+  });
+});
+
+const connectedUsers = new Map();
+
+// Routes de base
 app.get('/', (req, res) => {
   console.log('✅ Route / appelée avec succès');
   res.json({ 
@@ -73,74 +154,6 @@ app.get('/api', (req, res) => {
   });
 });
 
-const PORT = process.env.PORT || 10000;
-
-// Configuration Socket.io APRÈS les routes de base
-const io = socketIo(server, {
-  cors: { 
-    origin: "*", 
-    methods: ["GET", "POST"] 
-  }
-});
-
-// Dossier uploads
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-app.use('/uploads', express.static(uploadsDir));
-
-// BASE DE DONNÉES - NOUVELLE CONNEXION (mémoire)
-const db = new sqlite3.Database(':memory:');
-
-// Initialisation DB COMPLÈTE
-db.serialize(() => {
-  // Tables
-  db.run(`CREATE TABLE users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE,
-    password TEXT,
-    service_id TEXT
-  )`);
-  
-  db.run(`CREATE TABLE messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    from_user TEXT,
-    from_service TEXT,
-    to_service TEXT,
-    message_type TEXT,
-    content TEXT,
-    file_name TEXT,
-    file_url TEXT,
-    file_type TEXT,
-    reply_to INTEGER,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    read_by TEXT DEFAULT '[]'
-  )`);
-  
-  // TOUS LES UTILISATEURS
-  const stmt = db.prepare("INSERT INTO users (username, password, service_id) VALUES (?, ?, ?)");
-  
-  stmt.run("nourreddine", "nour01", "directeur");
-  stmt.run("faysel", "fay2526", "kwin");
-  stmt.run("amine", "amine16", "ingénieur");
-  stmt.run("naima", "naima003", "secrétariat");
-  stmt.run("belkaceme", "belka002", "comptable");
-  stmt.run("salem", "salas", "gestionnaire");
-  stmt.run("abdenour", "nouri23", "personnel");
-  stmt.run("anwar", "anwar17", "commercial");
-  stmt.run("ramzi", "ramzi98", "magasin");
-  stmt.run("riyad", "rida54", "démarcheur");
-  stmt.run("hamou", "ham0203", "chef_atelier");
-  stmt.run("chantier", "chantier0505", "chef_chantier");
-  
-  stmt.finalize();
-  
-  console.log('🎉 BASE DE DONNÉES RÉINITIALISÉE AVEC 12 UTILISATEURS');
-});
-
-const connectedUsers = new Map();
-
 // 🔐 ROUTE LOGIN AMÉLIORÉE avec validation
 app.post('/api/login', (req, res) => {
   console.log('🔐 Tentative de connexion:', req.body);
@@ -165,6 +178,15 @@ app.post('/api/login', (req, res) => {
     });
   }
 
+  // AFFICHER TOUS LES UTILISATEURS POUR DÉBOGAGE
+  db.all("SELECT * FROM users", (err, allUsers) => {
+    if (err) {
+      console.error('❌ Erreur récupération users:', err);
+    } else {
+      console.log('👥 UTILISATEURS DISPONIBLES:', allUsers.map(u => `${u.username} (${u.service_id})`));
+    }
+  });
+
   db.get(
     'SELECT * FROM users WHERE username = ? AND password = ? AND service_id = ?',
     [username.trim(), password.trim(), service.trim()],
@@ -178,14 +200,15 @@ app.post('/api/login', (req, res) => {
       }
       
       if (!user) {
-        console.log('❌ Identifiants incorrects pour:', username);
+        console.log('❌ Identifiants incorrects pour:', { username, service });
+        console.log('💡 Vérifiez que le service correspond exactement');
         return res.status(401).json({ 
           success: false,
           error: 'Nom d\'utilisateur, mot de passe ou service incorrect' 
         });
       }
 
-      console.log('✅ Connexion réussie:', user.username);
+      console.log('✅ Connexion réussie:', user.username, '- Service:', user.service_id);
       res.json({
         success: true,
         user: {
@@ -274,6 +297,7 @@ io.on('connection', (socket) => {
   socket.on('user_connected', (userData) => {
     connectedUsers.set(socket.id, userData);
     io.emit('users_online', Array.from(connectedUsers.values()));
+    console.log('👥 Utilisateurs en ligne:', Array.from(connectedUsers.values()));
   });
 
   socket.on('disconnect', () => {
@@ -281,6 +305,7 @@ io.on('connection', (socket) => {
     if (userData) {
       connectedUsers.delete(socket.id);
       io.emit('users_online', Array.from(connectedUsers.values()));
+      console.log('👋 Utilisateur déconnecté:', userData.username);
     }
   });
 });
@@ -304,10 +329,12 @@ app.use('*', (req, res) => {
   });
 });
 
+const PORT = process.env.PORT || 10000;
+
 // Démarrage
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🎉 Serveur démarré sur le port ${PORT}`);
-  console.log(`👥 12 utilisateurs chargés`);
+  console.log(`👥 12 utilisateurs configurés`);
   console.log(`🚀 Prêt à recevoir des connexions!`);
   console.log(`🌐 Testez: https://syr-backend.onrender.com/api`);
 });
