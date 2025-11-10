@@ -112,10 +112,18 @@ db.serialize(() => {
   )`);
   
   const stmt = db.prepare("INSERT OR IGNORE INTO users (username, password, service_id) VALUES (?, ?, ?)");
-  stmt.run("admin", "admin123", "directeur");
-  stmt.run("john", "john123", "secrétariat");
-  stmt.run("marie", "marie123", "comptable");
-  stmt.run("pierre", "pierre123", "commercial");
+  stmt.run("nourreddine", "nour01", "directeur");
+ stmt.run("faysel", "fay2526", "kwin");
+ stmt.run("amine", "amine16", "ingénieur");
+  stmt.run("naima", "naima003", "secrétariat");
+  stmt.run("belkaceme", "belka002", "comptable");
+ stmt.run("salem", "salas", "gestionnaire");
+ stmt.run("abdenour", "nouri23", "personnel");
+  stmt.run("anwar", "anwar17", "commercial");
+ stmt.run("ramzi", "ramzi98", "magasin");
+ stmt.run("riyad", "rida54", "Démarcheur");
+ stmt.run("hamou", "ham0203", "chef attelier");
+ stmt.run("chantier", "chantier0505", "chef de chantier");
   stmt.finalize();
   
   console.log('✅ Base de données initialisée');
